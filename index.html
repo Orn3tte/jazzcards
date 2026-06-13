@@ -113,6 +113,28 @@ const micAvailable = !!(navigator.mediaDevices && navigator.mediaDevices.getUser
 let _audioCtx=null;
 function getAudioCtx(){ if(!_audioCtx) _audioCtx=new (window.AudioContext||window.webkitAudioContext)(); return _audioCtx; }
 
+// Find the musical onset (seconds) so we can skip the mic-open transient + lead-in.
+// A brief pop impulse won't sustain; a real note will — so require energy held for ~50ms.
+function leadOffset(buf){
+  if(!buf||!buf.numberOfChannels) return 0;
+  const sr=buf.sampleRate, ch=buf.getChannelData(0);
+  const hop=Math.max(1,Math.floor(sr*0.005));        // 5ms analysis hop
+  const scan=Math.min(ch.length, Math.floor(sr*1.2)); // search the first 1.2s
+  const rms=[];
+  for(let i=0;i+hop<=scan;i+=hop){ let s=0; for(let j=0;j<hop;j++){ const v=ch[i+j]; s+=v*v; } rms.push(Math.sqrt(s/hop)); }
+  if(rms.length<4) return 0;
+  let floor=Infinity, peak=0;
+  for(const r of rms){ if(r<floor) floor=r; if(r>peak) peak=r; }
+  const thresh=Math.max(floor*3, peak*0.06, 0.004);
+  const need=10; // 10 hops = ~50ms sustained ⇒ a note, not a transient
+  let run=0;
+  for(let k=0;k<rms.length;k++){
+    if(rms[k]>=thresh){ if(++run>=need){ const onset=(k-run+1)*hop/sr; return Math.max(0,onset-0.01); } }
+    else run=0;
+  }
+  return 0;
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 function App(){
   const [tab,setTab]=useState("cards");
@@ -431,7 +453,6 @@ function DrillView({ cards }){
   const cycleSeq=useRef([]), cyclePos=useRef(0), lastIdx=useRef(-1);
   const srcRef=useRef(null), stretchRef=useRef(null), bufCache=useRef(new Map()), endTimer=useRef(null), gainRef=useRef(null), hpRef=useRef(null);
   const FADE=0.006; // s — short fade in/out to kill onset/offset clicks while preserving the attack
-  const LEAD=0.02;  // s — skip the first samples (mic-open transient lives here)
 
   // master chain: nodes → gain (envelope) → highpass (DC/sub-bass thump blocker) → out
   const getGain=useCallback(()=>{
@@ -466,13 +487,14 @@ function DrillView({ cards }){
   },[silence]);
   useEffect(()=>()=>cleanupAudio(),[cleanupAudio]);
 
-  // decode a card's blob to an AudioBuffer once, then cache it for instant replay
+  // decode a card's blob to an AudioBuffer once (+ analyze its onset), then cache for instant replay
   const getBuffer=useCallback(async(card)=>{
     const cache=bufCache.current;
     if(cache.has(card.id)) return cache.get(card.id);
     const ctx=getAudioCtx();
     const buf=await ctx.decodeAudioData(await card.blob.arrayBuffer());
-    cache.set(card.id,buf); return buf;
+    const rec={buf, lead:leadOffset(buf)};
+    cache.set(card.id,rec); return rec;
   },[]);
 
   // lazily build one Signalsmith Stretch node, reused for the whole session
@@ -501,9 +523,9 @@ function DrillView({ cards }){
       const ctx=getAudioCtx();
       if(ctx.state==="suspended") await ctx.resume();
       silence(); // fade out & stop previous
-      const buf=await getBuffer(cards[idx]);
+      const {buf,lead:rawLead}=await getBuffer(cards[idx]);
       const g=getGain(), gp=g.gain;
-      const lead=Math.min(LEAD,(buf.duration||0)*0.5); // skip mic-open transient (capped)
+      const lead=Math.min(Math.max(rawLead,0),(buf.duration||0)*0.5); // trim to onset (capped)
       if(semitones===0){
         // exact-fidelity bypass: play the decoded buffer (from `lead` onward)
         const t0=ctx.currentTime+0.05;
