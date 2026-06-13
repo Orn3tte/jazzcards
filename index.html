@@ -1,0 +1,450 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<meta name="theme-color" content="#16140F" />
+<meta name="mobile-web-app-capable" content="yes" />
+<meta name="apple-mobile-web-app-capable" content="yes" />
+<title>Lick Drill</title>
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=DM+Mono:wght@400;500&family=Fraunces:opsz,wght@9..144,500;9..144,600&display=swap');
+  :root { color-scheme: dark; }
+  html, body { margin: 0; padding: 0; background: #16140F; }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  button { font-family: inherit; cursor: pointer; border: none; }
+  input, textarea { font-family: inherit; }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.45} }
+  @keyframes rise { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:none} }
+  @keyframes spin { from{transform:rotate(0)} to{transform:rotate(360deg)} }
+  @media (prefers-reduced-motion: reduce){ *{animation:none!important;transition:none!important} }
+  .mono { font-family: 'DM Mono', monospace; }
+  .disp { font-family: 'Fraunces', Georgia, serif; }
+  :focus-visible { outline: 2px solid #C8862F; outline-offset: 2px; }
+  #root { min-height: 100vh; }
+</style>
+<!-- React + Babel + Tone (CDN) -->
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel" data-presets="react">
+const { useState, useEffect, useRef, useCallback, useMemo } = React;
+
+// ── palette ──
+const ACCENT="#C8862F", ACCENT_DIM="#8A5E22", BG="#16140F", PANEL="#211D16",
+      PANEL_HI="#2C271D", LINE="#3A3327", TEXT="#EDE6D6", MUTED="#9A917E", RED="#C0492F";
+const MAX_SEC = 15;
+
+// ── inline SVG icons ──
+function Icon({ name, size=24, color=TEXT, fill="none", style }) {
+  const common = { width:size, height:size, viewBox:"0 0 24 24", fill:"none",
+    stroke:color, strokeWidth:2, strokeLinecap:"round", strokeLinejoin:"round", style };
+  switch(name){
+    case "mic": return (<svg {...common}><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0"/><line x1="12" y1="18" x2="12" y2="21"/><line x1="8" y1="21" x2="16" y2="21"/></svg>);
+    case "square": return (<svg {...common} fill={fill}><rect x="6" y="6" width="12" height="12" rx="2"/></svg>);
+    case "play": return (<svg {...common} fill={fill==="none"?color:fill} stroke={fill==="none"?color:fill}><polygon points="6 4 20 12 6 20"/></svg>);
+    case "pause": return (<svg {...common} fill={color} stroke={color}><rect x="6" y="5" width="3.6" height="14" rx="1"/><rect x="14.4" y="5" width="3.6" height="14" rx="1"/></svg>);
+    case "trash": return (<svg {...common}><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 6V4a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>);
+    case "chevron": return (<svg {...common}><polyline points="9 6 15 12 9 18"/></svg>);
+    case "x": return (<svg {...common}><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg>);
+    case "check": return (<svg {...common}><polyline points="5 13 10 18 19 6"/></svg>);
+    case "pencil": return (<svg {...common}><path d="M16 3l5 5L8 21H3v-5L16 3z"/><line x1="13" y1="6" x2="18" y2="11"/></svg>);
+    case "disc": return (<svg {...common}><circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="0.6" fill={color}/><path d="M16.8 7.2a6.8 6.8 0 0 1 0 9.6"/></svg>);
+    default: return null;
+  }
+}
+
+// ── IndexedDB storage ──
+const DB_NAME="lickdrill", STORE="cards";
+function openDB(){
+  return new Promise((res,rej)=>{
+    const req = indexedDB.open(DB_NAME,1);
+    req.onupgradeneeded = ()=>{ if(!req.result.objectStoreNames.contains(STORE)) req.result.createObjectStore(STORE,{keyPath:"id"}); };
+    req.onsuccess = ()=>res(req.result);
+    req.onerror = ()=>rej(req.error);
+  });
+}
+async function dbGetAll(){
+  const db = await openDB();
+  return new Promise((res,rej)=>{
+    const tx = db.transaction(STORE,"readonly");
+    const r = tx.objectStore(STORE).getAll();
+    r.onsuccess = ()=>res(r.result||[]); r.onerror=()=>rej(r.error);
+  });
+}
+async function dbPut(card){
+  const db = await openDB();
+  return new Promise((res,rej)=>{
+    const tx = db.transaction(STORE,"readwrite");
+    tx.objectStore(STORE).put(card);
+    tx.oncomplete=()=>res(); tx.onerror=()=>rej(tx.error);
+  });
+}
+async function dbDelete(id){
+  const db = await openDB();
+  return new Promise((res,rej)=>{
+    const tx = db.transaction(STORE,"readwrite");
+    tx.objectStore(STORE).delete(id);
+    tx.oncomplete=()=>res(); tx.onerror=()=>rej(tx.error);
+  });
+}
+
+// ── helpers ──
+const KEY_MODES=[{id:"original",label:"Original key"},{id:"random",label:"Random key"},{id:"cycle",label:"Cycle all 12"}];
+const fmt=(s)=>{const m=Math.floor(s/60),r=Math.floor(s%60);return `${m}:${String(r).padStart(2,"0")}`;};
+const SEMI_LABEL=(n)=> n===0?"±0":n>0?`+${n}`:`${n}`;
+function randIndex(len, avoid){
+  if(len<=1) return 0;
+  let i=Math.floor(Math.random()*len);
+  if(i===avoid) i=(i+1+Math.floor(Math.random()*(len-1)))%len;
+  return i;
+}
+const micAvailable = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) && window.isSecureContext;
+
+// ─────────────────────────────────────────────────────────────────────────────
+function App(){
+  const [tab,setTab]=useState("cards");
+  const [cards,setCards]=useState(null);
+  const [toast,setToast]=useState(null);
+  const [warnOpen,setWarnOpen]=useState(!micAvailable);
+
+  useEffect(()=>{ dbGetAll().then(list=>{ list.sort((a,b)=>b.createdAt-a.createdAt); setCards(list); }).catch(()=>setCards([])); },[]);
+
+  const flash=useCallback((m)=>{ setToast(m); setTimeout(()=>setToast(null),2200); },[]);
+  const upsert=useCallback(async(card)=>{ await dbPut(card); setCards(prev=>{ const o=(prev||[]).filter(c=>c.id!==card.id); return [card,...o].sort((a,b)=>b.createdAt-a.createdAt); }); },[]);
+  const remove=useCallback(async(id)=>{ await dbDelete(id); setCards(prev=>(prev||[]).filter(c=>c.id!==id)); },[]);
+
+  return (
+    <div style={{minHeight:"100vh",background:BG,color:TEXT,fontFamily:"'DM Sans',system-ui,sans-serif",display:"flex",flexDirection:"column"}}>
+      <header style={{padding:"18px 20px 14px",borderBottom:`1px solid ${LINE}`,display:"flex",alignItems:"center",gap:12}}>
+        <Icon name="disc" size={22} color={ACCENT}/>
+        <div>
+          <div className="disp" style={{fontSize:20,lineHeight:1}}>Lick Drill</div>
+          <div className="mono" style={{fontSize:11,color:MUTED,marginTop:3,letterSpacing:".04em"}}>EAR TRAINING FOR JAZZ LINES</div>
+        </div>
+      </header>
+
+      {warnOpen && (
+        <div style={{background:"#2A1E14",borderBottom:`1px solid ${ACCENT_DIM}`,padding:"11px 16px",display:"flex",gap:10,alignItems:"flex-start"}}>
+          <div style={{flex:1,fontSize:12.5,color:"#E8C9A0",lineHeight:1.45}}>
+            Recording needs a secure page. This file isn’t served over <span className="mono">https://</span> or <span className="mono">localhost</span>, so the mic is blocked. You can still browse and drill saved cards. See the note below to enable recording.
+          </div>
+          <button onClick={()=>setWarnOpen(false)} aria-label="Dismiss" style={{background:"transparent",padding:2,flexShrink:0}}><Icon name="x" size={16} color="#E8C9A0"/></button>
+        </div>
+      )}
+
+      <nav style={{display:"flex",borderBottom:`1px solid ${LINE}`}}>
+        {[["cards","Cards"],["drill","Drill"]].map(([id,label])=>(
+          <button key={id} onClick={()=>setTab(id)} style={{flex:1,padding:"13px 0",background:"transparent",color:tab===id?ACCENT:MUTED,fontWeight:700,fontSize:14,letterSpacing:".02em",borderBottom:tab===id?`2px solid ${ACCENT}`:"2px solid transparent"}}>{label}</button>
+        ))}
+      </nav>
+
+      <main style={{flex:1,overflowY:"auto"}}>
+        {cards===null ? (
+          <div style={{padding:40,textAlign:"center",color:MUTED}} className="mono">loading…</div>
+        ) : tab==="cards" ? (
+          <CardsView cards={cards} onUpsert={upsert} onRemove={remove} flash={flash}/>
+        ) : (
+          <DrillView cards={cards}/>
+        )}
+      </main>
+
+      {toast && (
+        <div style={{position:"fixed",bottom:22,left:"50%",transform:"translateX(-50%)",background:PANEL_HI,border:`1px solid ${LINE}`,color:TEXT,padding:"10px 18px",borderRadius:10,fontSize:13.5,fontWeight:500,animation:"rise .2s ease",boxShadow:"0 8px 24px rgba(0,0,0,.4)",zIndex:50}}>{toast}</div>
+      )}
+    </div>
+  );
+}
+
+// ── Cards view ──
+function CardsView({ cards, onUpsert, onRemove, flash }){
+  const [editing,setEditing]=useState(null);
+  return (
+    <div style={{padding:16}}>
+      {!editing && (
+        <button onClick={()=>setEditing({fresh:true})} style={{width:"100%",padding:16,borderRadius:14,background:PANEL,border:`1px solid ${LINE}`,color:TEXT,display:"flex",alignItems:"center",justifyContent:"center",gap:10,fontSize:15.5,fontWeight:700,marginBottom:18}}>
+          <Icon name="mic" size={19} color={ACCENT}/> Record a lick
+        </button>
+      )}
+      {editing && (
+        <Recorder existing={editing.fresh?null:editing}
+          onSave={async(c)=>{ await onUpsert(c); setEditing(null); flash("Saved"); }}
+          onCancel={()=>setEditing(null)}/>
+      )}
+      {!editing && cards.length===0 && (
+        <div style={{marginTop:30,textAlign:"center",color:MUTED,border:`1px dashed ${LINE}`,borderRadius:14,padding:"38px 20px"}}>
+          <div className="disp" style={{fontSize:18,color:TEXT,marginBottom:6}}>No licks yet</div>
+          <div style={{fontSize:13.5,lineHeight:1.5}}>Record a short phrase, give it a name, and it becomes a card you can drill by ear.</div>
+        </div>
+      )}
+      {!editing && cards.map(c=>(
+        <CardRow key={c.id} card={c} onEdit={()=>setEditing(c)} onDelete={()=>{ onRemove(c.id); flash("Deleted"); }}/>
+      ))}
+    </div>
+  );
+}
+
+function CardRow({ card, onEdit, onDelete }){
+  const [playing,setPlaying]=useState(false);
+  const url = useMemo(()=> card.blob ? URL.createObjectURL(card.blob) : card.audioBase64, [card]);
+  const audioRef=useRef(null);
+  useEffect(()=>()=>{ if(audioRef.current) audioRef.current.pause(); if(card.blob && url) URL.revokeObjectURL(url); },[url]);
+  const toggle=()=>{
+    if(!audioRef.current){ audioRef.current=new Audio(url); audioRef.current.onended=()=>setPlaying(false); }
+    if(playing){ audioRef.current.pause(); setPlaying(false); }
+    else { audioRef.current.currentTime=0; audioRef.current.play(); setPlaying(true); }
+  };
+  return (
+    <div style={{background:PANEL,border:`1px solid ${LINE}`,borderRadius:14,padding:"13px 14px",marginBottom:11,display:"flex",alignItems:"center",gap:13}}>
+      <button onClick={toggle} aria-label={playing?"Pause":"Play"} style={{width:46,height:46,borderRadius:"50%",flexShrink:0,background:playing?ACCENT:PANEL_HI,border:`1px solid ${playing?ACCENT:LINE}`,display:"grid",placeItems:"center"}}>
+        {playing? <Icon name="pause" size={19} color={BG}/> : <Icon name="play" size={19} color={ACCENT} style={{marginLeft:2}}/>}
+      </button>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontWeight:700,fontSize:15.5,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{card.title||"Untitled"}</div>
+        {card.description ? <div style={{fontSize:13,color:MUTED,marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{card.description}</div> : null}
+        <div className="mono" style={{fontSize:10.5,color:ACCENT_DIM,marginTop:4,letterSpacing:".03em"}}>{fmt(card.duration||0)}</div>
+      </div>
+      <button onClick={onEdit} aria-label="Edit" style={{background:"transparent",padding:8}}><Icon name="pencil" size={17} color={MUTED}/></button>
+      <button onClick={onDelete} aria-label="Delete" style={{background:"transparent",padding:8}}><Icon name="trash" size={17} color={MUTED}/></button>
+    </div>
+  );
+}
+
+// ── Recorder / editor ──
+function Recorder({ existing, onSave, onCancel }){
+  const [phase,setPhase]=useState(existing?"ready":"idle");
+  const [elapsed,setElapsed]=useState(0);
+  const [audioBlob,setAudioBlob]=useState(existing?existing.blob:null);
+  const [duration,setDuration]=useState(existing?existing.duration:0);
+  const [title,setTitle]=useState(existing?existing.title:"");
+  const [desc,setDesc]=useState(existing?existing.description:"");
+  const [err,setErr]=useState(null);
+  const [preview,setPreview]=useState(false);
+
+  const mediaRec=useRef(null), chunks=useRef([]), timer=useRef(null), startedAt=useRef(0), stream=useRef(null), previewAudio=useRef(null);
+  const previewUrl = useMemo(()=> audioBlob ? URL.createObjectURL(audioBlob) : null, [audioBlob]);
+
+  const stop=useCallback(()=>{ if(mediaRec.current && mediaRec.current.state!=="inactive") mediaRec.current.stop(); clearInterval(timer.current); },[]);
+
+  const begin=async()=>{
+    setErr(null);
+    if(!micAvailable){ setErr("Recording needs an https:// or localhost page (see the note on the page)."); return; }
+    try{
+      const s=await navigator.mediaDevices.getUserMedia({audio:true});
+      stream.current=s;
+      const mime = MediaRecorder.isTypeSupported("audio/webm")?"audio/webm":MediaRecorder.isTypeSupported("audio/mp4")?"audio/mp4":"";
+      const mr=new MediaRecorder(s, mime?{mimeType:mime}:undefined);
+      chunks.current=[];
+      mr.ondataavailable=(e)=>{ if(e.data.size) chunks.current.push(e.data); };
+      mr.onstop=()=>{
+        const blob=new Blob(chunks.current,{type:mime||"audio/webm"});
+        setDuration(Math.min((Date.now()-startedAt.current)/1000, MAX_SEC));
+        setAudioBlob(blob); setPhase("ready");
+        s.getTracks().forEach(t=>t.stop());
+      };
+      mediaRec.current=mr; mr.start(); startedAt.current=Date.now(); setElapsed(0); setPhase("recording");
+      timer.current=setInterval(()=>{ const e=(Date.now()-startedAt.current)/1000; setElapsed(e); if(e>=MAX_SEC) stop(); },100);
+    }catch(e){ setErr("Microphone access was blocked. Allow mic permission and try again."); }
+  };
+
+  useEffect(()=>()=>{ clearInterval(timer.current); if(stream.current) stream.current.getTracks().forEach(t=>t.stop()); if(previewAudio.current) previewAudio.current.pause(); if(previewUrl) URL.revokeObjectURL(previewUrl); },[previewUrl]);
+
+  const togglePreview=()=>{
+    if(!previewUrl) return;
+    if(!previewAudio.current){ previewAudio.current=new Audio(previewUrl); previewAudio.current.onended=()=>setPreview(false); }
+    if(preview){ previewAudio.current.pause(); setPreview(false); }
+    else { previewAudio.current.currentTime=0; previewAudio.current.play(); setPreview(true); }
+  };
+
+  const commit=()=>{
+    if(!audioBlob) return;
+    onSave({ id: existing?existing.id:`c_${Date.now()}_${Math.random().toString(36).slice(2,7)}`, title:title.trim(), description:desc.trim(), blob:audioBlob, duration, createdAt: existing?existing.createdAt:Date.now() });
+  };
+
+  const inputStyle={width:"100%",background:BG,border:`1px solid ${LINE}`,borderRadius:10,color:TEXT,padding:"11px 13px",fontSize:15};
+
+  return (
+    <div style={{background:PANEL,border:`1px solid ${ACCENT_DIM}`,borderRadius:16,padding:18,marginBottom:18,animation:"rise .2s ease"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+        <div className="disp" style={{fontSize:18}}>{existing?"Edit lick":"New lick"}</div>
+        <button onClick={onCancel} aria-label="Cancel" style={{background:"transparent",padding:4}}><Icon name="x" size={20} color={MUTED}/></button>
+      </div>
+
+      <div style={{background:BG,borderRadius:12,padding:"22px 16px",marginBottom:16,display:"flex",flexDirection:"column",alignItems:"center",gap:14,border:`1px solid ${LINE}`}}>
+        {phase==="recording" ? (
+          <>
+            <div className="mono" style={{fontSize:30,color:RED,animation:"pulse 1.2s infinite",letterSpacing:".05em"}}>{elapsed.toFixed(1)}s</div>
+            <div style={{width:"100%",maxWidth:240,height:4,background:LINE,borderRadius:2,overflow:"hidden"}}><div style={{width:`${(elapsed/MAX_SEC)*100}%`,height:"100%",background:RED}}/></div>
+            <button onClick={stop} style={{width:64,height:64,borderRadius:"50%",background:RED,display:"grid",placeItems:"center"}}><Icon name="square" size={24} color="#fff" fill="#fff"/></button>
+            <div className="mono" style={{fontSize:11,color:MUTED}}>TAP TO STOP · MAX {MAX_SEC}s</div>
+          </>
+        ) : audioBlob ? (
+          <>
+            <button onClick={togglePreview} style={{width:64,height:64,borderRadius:"50%",background:preview?ACCENT:PANEL_HI,border:`1px solid ${ACCENT}`,display:"grid",placeItems:"center"}}>
+              {preview? <Icon name="pause" size={26} color={BG}/> : <Icon name="play" size={26} color={ACCENT} style={{marginLeft:3}}/>}
+            </button>
+            <div className="mono" style={{fontSize:12,color:MUTED}}>{fmt(duration)} CAPTURED</div>
+            <button onClick={()=>{ setAudioBlob(null); setPhase("idle"); }} style={{background:"transparent",color:ACCENT,fontSize:13,fontWeight:600,padding:4}}>Re-record</button>
+          </>
+        ) : (
+          <>
+            <button onClick={begin} style={{width:64,height:64,borderRadius:"50%",background:RED,display:"grid",placeItems:"center",border:`3px solid ${PANEL}`,boxShadow:`0 0 0 1px ${RED}`}}><Icon name="mic" size={26} color="#fff"/></button>
+            <div className="mono" style={{fontSize:11,color:MUTED}}>TAP TO RECORD</div>
+          </>
+        )}
+        {err && <div style={{fontSize:12.5,color:RED,textAlign:"center",lineHeight:1.4}}>{err}</div>}
+      </div>
+
+      <div style={{display:"flex",flexDirection:"column",gap:11}}>
+        <input value={title} onChange={(e)=>setTitle(e.target.value)} placeholder="Title (e.g. ii–V resolution, bar 3)" style={inputStyle} maxLength={80}/>
+        <textarea value={desc} onChange={(e)=>setDesc(e.target.value)} placeholder="Notes — fingering, context, source… (optional)" rows={2} style={{...inputStyle,resize:"vertical",lineHeight:1.4}} maxLength={400}/>
+      </div>
+
+      <button onClick={commit} disabled={!audioBlob} style={{width:"100%",marginTop:16,padding:14,borderRadius:12,background:audioBlob?ACCENT:PANEL_HI,color:audioBlob?BG:MUTED,fontWeight:700,fontSize:15.5,display:"flex",alignItems:"center",justifyContent:"center",gap:8,opacity:audioBlob?1:0.6}}>
+        <Icon name="check" size={18} color={audioBlob?BG:MUTED}/> {existing?"Save changes":"Save lick"}
+      </button>
+    </div>
+  );
+}
+
+// ── Drill view ──
+function DrillView({ cards }){
+  const [running,setRunning]=useState(false);
+  const [keyMode,setKeyMode]=useState("original");
+  const [curIdx,setCurIdx]=useState(-1);
+  const [semi,setSemi]=useState(0);
+  const [playing,setPlaying]=useState(false);
+  const [busy,setBusy]=useState(false);
+  const [count,setCount]=useState(0);
+  const [engineErr,setEngineErr]=useState(null);
+
+  const cycleSeq=useRef([]), cyclePos=useRef(0), player=useRef(null), shift=useRef(null), lastIdx=useRef(-1), curUrl=useRef(null);
+
+  const cleanupAudio=useCallback(()=>{
+    try{ if(player.current){ player.current.stop(); player.current.dispose(); } }catch(_){}
+    try{ if(shift.current) shift.current.dispose(); }catch(_){}
+    if(curUrl.current){ URL.revokeObjectURL(curUrl.current); curUrl.current=null; }
+    player.current=null; shift.current=null;
+  },[]);
+  useEffect(()=>()=>cleanupAudio(),[cleanupAudio]);
+
+  const nextSemi=useCallback(()=>{
+    if(keyMode==="original") return 0;
+    if(keyMode==="random") return Math.floor(Math.random()*12)-5;
+    if(cyclePos.current>=cycleSeq.current.length){
+      const arr=Array.from({length:12},(_,i)=>i-5);
+      for(let i=arr.length-1;i>0;i--){ const j=Math.floor(Math.random()*(i+1)); [arr[i],arr[j]]=[arr[j],arr[i]]; }
+      cycleSeq.current=arr; cyclePos.current=0;
+    }
+    return cycleSeq.current[cyclePos.current++];
+  },[keyMode]);
+
+  const playIndex=useCallback(async(idx,semitones)=>{
+    setBusy(true); setEngineErr(null);
+    try{
+      if(!window.Tone) throw new Error("no tone");
+      await Tone.start();
+      cleanupAudio();
+      const card=cards[idx];
+      const url=URL.createObjectURL(card.blob); curUrl.current=url;
+      if(semitones===0){
+        const p=new Tone.Player({url,autostart:false}).toDestination();
+        await Tone.loaded(); player.current=p; p.onstop=()=>setPlaying(false); p.start();
+      } else {
+        const ps=new Tone.PitchShift({pitch:semitones,windowSize:0.1}).toDestination();
+        const p=new Tone.Player({url,autostart:false}).connect(ps);
+        await Tone.loaded(); shift.current=ps; player.current=p; p.onstop=()=>setPlaying(false); p.start();
+      }
+      setPlaying(true);
+    }catch(e){ setEngineErr("Audio engine failed to play this card."); setPlaying(false); }
+    finally{ setBusy(false); }
+  },[cards,cleanupAudio]);
+
+  const advance=useCallback(async()=>{
+    if(cards.length===0) return;
+    const idx=randIndex(cards.length,lastIdx.current); lastIdx.current=idx; setCurIdx(idx);
+    const s=nextSemi(); setSemi(s); setCount(c=>c+1);
+    await playIndex(idx,s);
+  },[cards.length,nextSemi,playIndex]);
+
+  const start=async()=>{ cycleSeq.current=[]; cyclePos.current=0; lastIdx.current=-1; setCount(0); setRunning(true); setTimeout(()=>advance(),0); };
+  const stopDrill=()=>{ cleanupAudio(); setRunning(false); setPlaying(false); setCurIdx(-1); };
+  const replay=async()=>{ if(curIdx<0) return; await playIndex(curIdx,semi); };
+
+  if(cards.length===0){
+    return (
+      <div style={{padding:16}}>
+        <div style={{marginTop:30,textAlign:"center",color:MUTED,border:`1px dashed ${LINE}`,borderRadius:14,padding:"38px 20px"}}>
+          <div className="disp" style={{fontSize:18,color:TEXT,marginBottom:6}}>Nothing to drill</div>
+          <div style={{fontSize:13.5,lineHeight:1.5}}>Record at least one lick in the Cards tab, then come back to drill it by ear.</div>
+        </div>
+      </div>
+    );
+  }
+
+  if(!running){
+    return (
+      <div style={{padding:16}}>
+        <div className="mono" style={{fontSize:11,color:MUTED,letterSpacing:".06em",marginBottom:10}}>{cards.length} CARD{cards.length===1?"":"S"} READY</div>
+        <div style={{background:PANEL,border:`1px solid ${LINE}`,borderRadius:16,padding:18,marginBottom:18}}>
+          <div style={{fontSize:13.5,fontWeight:700,color:MUTED,marginBottom:12,letterSpacing:".02em"}}>KEY</div>
+          <div style={{display:"flex",flexDirection:"column",gap:9}}>
+            {KEY_MODES.map(m=>{
+              const on=keyMode===m.id;
+              return (
+                <button key={m.id} onClick={()=>setKeyMode(m.id)} style={{textAlign:"left",padding:"13px 15px",borderRadius:11,background:on?PANEL_HI:"transparent",border:`1px solid ${on?ACCENT:LINE}`,color:on?TEXT:MUTED,fontSize:15,fontWeight:on?700:500,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                  {m.label}{on && <Icon name="check" size={17} color={ACCENT}/>}
+                </button>
+              );
+            })}
+          </div>
+          <div style={{fontSize:12,color:MUTED,marginTop:12,lineHeight:1.5}}>
+            {keyMode==="original" && "Plays each lick exactly as recorded."}
+            {keyMode==="random" && "Transposes each lick to a random key. Duration is preserved."}
+            {keyMode==="cycle" && "Walks through all 12 keys before repeating any. Duration is preserved."}
+          </div>
+        </div>
+        <button onClick={start} style={{width:"100%",padding:16,borderRadius:14,background:ACCENT,color:BG,fontWeight:700,fontSize:16.5,display:"flex",alignItems:"center",justifyContent:"center",gap:9}}>
+          <Icon name="play" size={20} color={BG}/> Start drill
+        </button>
+        <div style={{fontSize:12.5,color:MUTED,marginTop:14,textAlign:"center",lineHeight:1.5}}>A random lick plays. Try to play it back by ear, then hit Next for another.</div>
+      </div>
+    );
+  }
+
+  return (
+    <div style={{padding:16,minHeight:"calc(100vh - 220px)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",position:"relative"}}>
+      <button onClick={stopDrill} style={{position:"absolute",top:0,right:0,background:"transparent",color:MUTED,fontSize:13.5,fontWeight:600,display:"flex",alignItems:"center",gap:5,padding:8}}>
+        <Icon name="x" size={16} color={MUTED}/> End
+      </button>
+      <div className="mono" style={{fontSize:12,color:MUTED,letterSpacing:".08em",marginBottom:28}}>PLAYED {count}</div>
+      <div style={{width:200,height:200,borderRadius:"50%",background:`radial-gradient(circle at 50% 40%, ${PANEL_HI}, ${PANEL})`,border:`2px solid ${playing?ACCENT:LINE}`,display:"grid",placeItems:"center",marginBottom:14,transition:"border-color .2s"}}>
+        <div style={{animation:playing?"spin 3.4s linear infinite":"none"}}><Icon name="disc" size={92} color={playing?ACCENT:LINE}/></div>
+      </div>
+      {keyMode!=="original" && <div className="mono" style={{fontSize:13,color:ACCENT,letterSpacing:".05em",marginBottom:4}}>TRANSPOSE {SEMI_LABEL(semi)} ST</div>}
+      <div style={{height:26,marginBottom:18}}><div className="mono" style={{fontSize:12,color:MUTED}}>{busy?"loading…":playing?"playing":"ready"}</div></div>
+      {engineErr && <div style={{fontSize:12.5,color:RED,marginBottom:14,textAlign:"center"}}>{engineErr}</div>}
+      <div style={{display:"flex",gap:12,alignItems:"center",width:"100%",maxWidth:360}}>
+        <button onClick={replay} disabled={busy} aria-label="Replay" style={{width:58,height:58,borderRadius:"50%",flexShrink:0,background:PANEL,border:`1px solid ${LINE}`,display:"grid",placeItems:"center",opacity:busy?0.5:1}}>
+          <Icon name="play" size={22} color={ACCENT} style={{marginLeft:2}}/>
+        </button>
+        <button onClick={advance} disabled={busy} style={{flex:1,height:58,borderRadius:16,background:ACCENT,color:BG,fontWeight:700,fontSize:17,display:"flex",alignItems:"center",justifyContent:"center",gap:8,opacity:busy?0.6:1}}>
+          Next <Icon name="chevron" size={22} color={BG}/>
+        </button>
+      </div>
+      <div style={{fontSize:12,color:MUTED,marginTop:16,textAlign:"center"}}>Replay if you missed it · Next for a new random lick</div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById("root")).render(<App/>);
+</script>
+</body>
+</html>
