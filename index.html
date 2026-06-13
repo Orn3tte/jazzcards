@@ -25,11 +25,12 @@
   :focus-visible { outline: 2px solid #C8862F; outline-offset: 2px; }
   #root { min-height: 100vh; }
 </style>
-<!-- React + Babel + Tone (CDN) -->
+<!-- React + Babel (CDN) -->
 <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
 <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/tone/14.8.49/Tone.js"></script>
+<!-- Signalsmith Stretch — WASM/AudioWorklet pitch-shifter (MIT). Self-contained: WASM + worklet are inlined. -->
+<script src="https://cdn.jsdelivr.net/npm/signalsmith-stretch@1.3.2/SignalsmithStretch.js"></script>
 </head>
 <body>
 <div id="root"></div>
@@ -107,6 +108,10 @@ function randIndex(len, avoid){
   return i;
 }
 const micAvailable = !!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia) && window.isSecureContext;
+
+// ── shared Web Audio context (lazy; created on first user gesture) ──
+let _audioCtx=null;
+function getAudioCtx(){ if(!_audioCtx) _audioCtx=new (window.AudioContext||window.webkitAudioContext)(); return _audioCtx; }
 
 // ─────────────────────────────────────────────────────────────────────────────
 function App(){
@@ -410,15 +415,42 @@ function DrillView({ cards }){
   const [count,setCount]=useState(0);
   const [engineErr,setEngineErr]=useState(null);
 
-  const cycleSeq=useRef([]), cyclePos=useRef(0), player=useRef(null), shift=useRef(null), lastIdx=useRef(-1), curUrl=useRef(null);
+  const cycleSeq=useRef([]), cyclePos=useRef(0), lastIdx=useRef(-1);
+  const srcRef=useRef(null), stretchRef=useRef(null), bufCache=useRef(new Map()), endTimer=useRef(null);
+
+  // stop whatever is currently sounding, but keep the (reusable) stretch node alive
+  const stopNodes=useCallback(()=>{
+    clearTimeout(endTimer.current);
+    try{ if(srcRef.current){ srcRef.current.onended=null; srcRef.current.stop(); srcRef.current.disconnect(); } }catch(_){}
+    srcRef.current=null;
+    try{ if(stretchRef.current) stretchRef.current.stop(); }catch(_){}
+  },[]);
 
   const cleanupAudio=useCallback(()=>{
-    try{ if(player.current){ player.current.stop(); player.current.dispose(); } }catch(_){}
-    try{ if(shift.current) shift.current.dispose(); }catch(_){}
-    if(curUrl.current){ URL.revokeObjectURL(curUrl.current); curUrl.current=null; }
-    player.current=null; shift.current=null;
-  },[]);
+    stopNodes();
+    try{ if(stretchRef.current) stretchRef.current.disconnect(); }catch(_){}
+    stretchRef.current=null;
+  },[stopNodes]);
   useEffect(()=>()=>cleanupAudio(),[cleanupAudio]);
+
+  // decode a card's blob to an AudioBuffer once, then cache it for instant replay
+  const getBuffer=useCallback(async(card)=>{
+    const cache=bufCache.current;
+    if(cache.has(card.id)) return cache.get(card.id);
+    const ctx=getAudioCtx();
+    const buf=await ctx.decodeAudioData(await card.blob.arrayBuffer());
+    cache.set(card.id,buf); return buf;
+  },[]);
+
+  // lazily build one Signalsmith Stretch node, reused for the whole session
+  const ensureStretch=useCallback(async()=>{
+    if(stretchRef.current) return stretchRef.current;
+    if(typeof SignalsmithStretch==="undefined") throw new Error("stretch engine not loaded");
+    const ctx=getAudioCtx();
+    const node=await SignalsmithStretch(ctx);
+    node.connect(ctx.destination);
+    stretchRef.current=node; return node;
+  },[]);
 
   const nextSemi=useCallback(()=>{
     if(keyMode==="original") return 0;
@@ -434,23 +466,30 @@ function DrillView({ cards }){
   const playIndex=useCallback(async(idx,semitones)=>{
     setBusy(true); setEngineErr(null);
     try{
-      if(!window.Tone) throw new Error("no tone");
-      await Tone.start();
-      cleanupAudio();
-      const card=cards[idx];
-      const url=URL.createObjectURL(card.blob); curUrl.current=url;
+      const ctx=getAudioCtx();
+      if(ctx.state==="suspended") await ctx.resume();
+      stopNodes();
+      const buf=await getBuffer(cards[idx]);
       if(semitones===0){
-        const p=new Tone.Player({url,autostart:false}).toDestination();
-        await Tone.loaded(); player.current=p; p.onstop=()=>setPlaying(false); p.start();
+        // exact-fidelity bypass: play the decoded buffer untouched
+        const src=ctx.createBufferSource();
+        src.buffer=buf; src.connect(ctx.destination);
+        src.onended=()=>setPlaying(false);
+        srcRef.current=src; src.start();
       } else {
-        const ps=new Tone.PitchShift({pitch:semitones,windowSize:0.1}).toDestination();
-        const p=new Tone.Player({url,autostart:false}).connect(ps);
-        await Tone.loaded(); shift.current=ps; player.current=p; p.onstop=()=>setPlaying(false); p.start();
+        // pitch-shift via Signalsmith (duration preserved); handles mono + polyphonic
+        const node=await ensureStretch();
+        const chans=[]; for(let c=0;c<buf.numberOfChannels;c++) chans.push(buf.getChannelData(c));
+        await node.dropBuffers();
+        await node.addBuffers(chans);
+        node.start({input:0, rate:1, semitones});
+        clearTimeout(endTimer.current);
+        endTimer.current=setTimeout(()=>setPlaying(false), buf.duration*1000+250);
       }
       setPlaying(true);
     }catch(e){ setEngineErr("Audio engine failed to play this card."); setPlaying(false); }
     finally{ setBusy(false); }
-  },[cards,cleanupAudio]);
+  },[cards,getBuffer,ensureStretch,stopNodes]);
 
   const advance=useCallback(async()=>{
     if(cards.length===0) return;
@@ -460,7 +499,7 @@ function DrillView({ cards }){
   },[cards.length,nextSemi,playIndex]);
 
   const start=async()=>{ cycleSeq.current=[]; cyclePos.current=0; lastIdx.current=-1; setCount(0); setRunning(true); setTimeout(()=>advance(),0); };
-  const stopDrill=()=>{ cleanupAudio(); setRunning(false); setPlaying(false); setCurIdx(-1); };
+  const stopDrill=()=>{ stopNodes(); setRunning(false); setPlaying(false); setCurIdx(-1); };
   const replay=async()=>{ if(curIdx<0) return; await playIndex(curIdx,semi); };
 
   if(cards.length===0){
