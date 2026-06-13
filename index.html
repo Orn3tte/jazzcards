@@ -594,15 +594,15 @@ function DrillView({ cards }){
         const chans=[]; for(let c=0;c<buf.numberOfChannels;c++) chans.push(buf.getChannelData(c));
         await node.dropBuffers();
         await node.addBuffers(chans);
-        const lat=(typeof node.latency==="function"?node.latency():0)||0;
-        const t0=ctx.currentTime+Math.max(0.06,lat+0.03);
+        // fixed pre-roll the node compensates against (its latency() is async, so don't await it here)
+        const t0=ctx.currentTime+0.12;
         node.start({output:t0, input:0, rate:1, semitones});
         gp.cancelScheduledValues(t0); gp.setValueAtTime(0,t0); gp.linearRampToValueAtTime(1,t0+fadeIn);
         clearTimeout(endTimer.current);
         endTimer.current=setTimeout(()=>setPlaying(false),(t0-ctx.currentTime+buf.duration)*1000+250);
       }
       setPlaying(true);
-    }catch(e){ setEngineErr("Audio engine failed to play this card."); setPlaying(false); }
+    }catch(e){ console.error("drill playback failed:",e); setEngineErr("Audio engine failed to play this card."); setPlaying(false); }
     finally{ setBusy(false); }
   },[cards,getBuffer,ensureStretch,getGain,silence]);
 
