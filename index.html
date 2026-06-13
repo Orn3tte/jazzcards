@@ -219,6 +219,7 @@ function CardRow({ card, onEdit, onDelete, onTagClick }){
   const [playing,setPlaying]=useState(false);
   const [slideX,setSlideX]=useState(0);
   const [anim,setAnim]=useState(false);
+  const [confirming,setConfirming]=useState(false);
   const url=useMemo(()=>card.blob?URL.createObjectURL(card.blob):card.audioBase64,[card]);
   const audioRef=useRef(null);
   const REVEAL=104;
@@ -226,7 +227,7 @@ function CardRow({ card, onEdit, onDelete, onTagClick }){
 
   useEffect(()=>()=>{if(audioRef.current)audioRef.current.pause();if(card.blob&&url)URL.revokeObjectURL(url);},[url]);
 
-  const moveTo=(x,animated)=>{liveX.current=x;setAnim(animated);setSlideX(x);};
+  const moveTo=(x,animated)=>{liveX.current=x;setAnim(animated);setSlideX(x);if(x===0)setConfirming(false);};
 
   const toggle=(e)=>{
     e.stopPropagation();
@@ -254,8 +255,18 @@ function CardRow({ card, onEdit, onDelete, onTagClick }){
   return (
     <div style={{position:"relative",overflow:"hidden",borderRadius:14,marginBottom:11,background:PANEL}}>
       <div style={{position:"absolute",right:0,top:0,bottom:0,width:REVEAL,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
-        <button onClick={onEdit} aria-label="Edit" style={{width:42,height:42,borderRadius:10,background:PANEL_HI,border:`1px solid ${LINE}`,display:"grid",placeItems:"center"}}><Icon name="pencil" size={17} color={MUTED}/></button>
-        <button onClick={onDelete} aria-label="Delete" style={{width:42,height:42,borderRadius:10,background:"#2A1010",border:`1px solid ${RED}`,display:"grid",placeItems:"center"}}><Icon name="trash" size={17} color={RED}/></button>
+        {confirming ? (<>
+          <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:6}}>
+            <div style={{fontSize:11,color:MUTED,fontWeight:700,letterSpacing:".04em"}}>DELETE?</div>
+            <div style={{display:"flex",gap:8}}>
+              <button onClick={()=>setConfirming(false)} aria-label="Cancel" style={{width:42,height:36,borderRadius:9,background:PANEL_HI,border:`1px solid ${LINE}`,display:"grid",placeItems:"center"}}><Icon name="x" size={16} color={MUTED}/></button>
+              <button onClick={onDelete} aria-label="Confirm delete" style={{width:42,height:36,borderRadius:9,background:RED,border:"none",display:"grid",placeItems:"center"}}><Icon name="check" size={16} color="#fff"/></button>
+            </div>
+          </div>
+        </>) : (<>
+          <button onClick={onEdit} aria-label="Edit" style={{width:42,height:42,borderRadius:10,background:PANEL_HI,border:`1px solid ${LINE}`,display:"grid",placeItems:"center"}}><Icon name="pencil" size={17} color={MUTED}/></button>
+          <button onClick={()=>setConfirming(true)} aria-label="Delete" style={{width:42,height:42,borderRadius:10,background:"#2A1010",border:`1px solid ${RED}`,display:"grid",placeItems:"center"}}><Icon name="trash" size={17} color={RED}/></button>
+        </>)}
       </div>
       <div
         onTouchStart={onTS} onTouchMove={onTM} onTouchEnd={onTE}
