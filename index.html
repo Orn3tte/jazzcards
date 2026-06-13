@@ -323,7 +323,9 @@ function Recorder({ existing, onSave, onCancel }){
     setErr(null);
     if(!micAvailable){ setErr("Recording needs an https:// or localhost page (see the note on the page)."); return; }
     try{
-      const s=await navigator.mediaDevices.getUserMedia({audio:true});
+      // raw capture — phone DSP (AGC ramp, noise/echo gating) both colours a sax line
+      // and causes the abrupt-open pop, so turn it off.
+      const s=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false,noiseSuppression:false,autoGainControl:false}});
       stream.current=s;
       const mime = MediaRecorder.isTypeSupported("audio/webm")?"audio/webm":MediaRecorder.isTypeSupported("audio/mp4")?"audio/mp4":"";
       const mr=new MediaRecorder(s, mime?{mimeType:mime}:undefined);
@@ -335,12 +337,18 @@ function Recorder({ existing, onSave, onCancel }){
         setAudioBlob(blob); setPhase("ready");
         s.getTracks().forEach(t=>t.stop());
       };
-      mediaRec.current=mr; mr.start(); startedAt.current=Date.now(); setElapsed(0); setPhase("recording");
+      mediaRec.current=mr;
+      // warm-up: let the mic settle (~280ms) before arming the recorder, so its
+      // abrupt opening transient isn't captured into the clip.
+      setPhase("arming");
+      await new Promise(r=>setTimeout(r,280));
+      if(stream.current!==s){ s.getTracks().forEach(t=>t.stop()); return; } // cancelled during warm-up
+      mr.start(); startedAt.current=Date.now(); setElapsed(0); setPhase("recording");
       timer.current=setInterval(()=>{ const e=(Date.now()-startedAt.current)/1000; setElapsed(e); if(e>=MAX_SEC) stop(); },100);
     }catch(e){ setErr("Microphone access was blocked. Allow mic permission and try again."); }
   };
 
-  useEffect(()=>()=>{ clearInterval(timer.current); if(stream.current) stream.current.getTracks().forEach(t=>t.stop()); if(previewAudio.current) previewAudio.current.pause(); if(previewUrl) URL.revokeObjectURL(previewUrl); },[previewUrl]);
+  useEffect(()=>()=>{ clearInterval(timer.current); if(stream.current){ stream.current.getTracks().forEach(t=>t.stop()); stream.current=null; } if(previewAudio.current) previewAudio.current.pause(); if(previewUrl) URL.revokeObjectURL(previewUrl); },[previewUrl]);
 
   const togglePreview=()=>{
     if(!previewUrl) return;
@@ -364,7 +372,12 @@ function Recorder({ existing, onSave, onCancel }){
       </div>
 
       <div style={{background:BG,borderRadius:12,padding:"22px 16px",marginBottom:16,display:"flex",flexDirection:"column",alignItems:"center",gap:14,border:`1px solid ${LINE}`}}>
-        {phase==="recording" ? (
+        {phase==="arming" ? (
+          <>
+            <div style={{width:64,height:64,borderRadius:"50%",background:PANEL_HI,border:`1px solid ${LINE}`,display:"grid",placeItems:"center"}}><div style={{animation:"spin 1s linear infinite",display:"grid"}}><Icon name="mic" size={26} color={ACCENT}/></div></div>
+            <div className="mono" style={{fontSize:11,color:MUTED}}>WARMING UP MIC…</div>
+          </>
+        ) : phase==="recording" ? (
           <>
             <div className="mono" style={{fontSize:30,color:RED,animation:"pulse 1.2s infinite",letterSpacing:".05em"}}>{elapsed.toFixed(1)}s</div>
             <div style={{width:"100%",maxWidth:240,height:4,background:LINE,borderRadius:2,overflow:"hidden"}}><div style={{width:`${(elapsed/MAX_SEC)*100}%`,height:"100%",background:RED}}/></div>
