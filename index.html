@@ -416,21 +416,33 @@ function DrillView({ cards }){
   const [engineErr,setEngineErr]=useState(null);
 
   const cycleSeq=useRef([]), cyclePos=useRef(0), lastIdx=useRef(-1);
-  const srcRef=useRef(null), stretchRef=useRef(null), bufCache=useRef(new Map()), endTimer=useRef(null);
+  const srcRef=useRef(null), stretchRef=useRef(null), bufCache=useRef(new Map()), endTimer=useRef(null), gainRef=useRef(null);
+  const FADE=0.006; // s — short fade in/out to kill onset/offset clicks while preserving the attack
 
-  // stop whatever is currently sounding, but keep the (reusable) stretch node alive
-  const stopNodes=useCallback(()=>{
+  // master gain: everything plays through this so we can envelope it click-free
+  const getGain=useCallback(()=>{
+    if(!gainRef.current){ const ctx=getAudioCtx(); const g=ctx.createGain(); g.gain.value=0; g.connect(ctx.destination); gainRef.current=g; }
+    return gainRef.current;
+  },[]);
+
+  // fade out and stop whatever is sounding; returns the scheduled stop time
+  const silence=useCallback((fade=FADE)=>{
     clearTimeout(endTimer.current);
-    try{ if(srcRef.current){ srcRef.current.onended=null; srcRef.current.stop(); srcRef.current.disconnect(); } }catch(_){}
+    if(!_audioCtx) return 0;
+    const t=_audioCtx.currentTime, stopAt=t+fade+0.006;
+    if(gainRef.current){ const gp=gainRef.current.gain; try{ gp.cancelScheduledValues(t); gp.setValueAtTime(gp.value,t); gp.linearRampToValueAtTime(0,t+fade); }catch(_){} }
+    try{ if(srcRef.current){ srcRef.current.onended=null; srcRef.current.stop(stopAt); } }catch(_){}
     srcRef.current=null;
-    try{ if(stretchRef.current) stretchRef.current.stop(); }catch(_){}
+    try{ if(stretchRef.current) stretchRef.current.stop(stopAt); }catch(_){}
+    return stopAt;
   },[]);
 
   const cleanupAudio=useCallback(()=>{
-    stopNodes();
+    silence();
     try{ if(stretchRef.current) stretchRef.current.disconnect(); }catch(_){}
-    stretchRef.current=null;
-  },[stopNodes]);
+    try{ if(gainRef.current) gainRef.current.disconnect(); }catch(_){}
+    stretchRef.current=null; gainRef.current=null;
+  },[silence]);
   useEffect(()=>()=>cleanupAudio(),[cleanupAudio]);
 
   // decode a card's blob to an AudioBuffer once, then cache it for instant replay
@@ -446,11 +458,10 @@ function DrillView({ cards }){
   const ensureStretch=useCallback(async()=>{
     if(stretchRef.current) return stretchRef.current;
     if(typeof SignalsmithStretch==="undefined") throw new Error("stretch engine not loaded");
-    const ctx=getAudioCtx();
-    const node=await SignalsmithStretch(ctx);
-    node.connect(ctx.destination);
+    const node=await SignalsmithStretch(getAudioCtx());
+    node.connect(getGain());
     stretchRef.current=node; return node;
-  },[]);
+  },[getGain]);
 
   const nextSemi=useCallback(()=>{
     if(keyMode==="original") return 0;
@@ -468,28 +479,36 @@ function DrillView({ cards }){
     try{
       const ctx=getAudioCtx();
       if(ctx.state==="suspended") await ctx.resume();
-      stopNodes();
+      silence(); // fade out & stop previous
       const buf=await getBuffer(cards[idx]);
+      const g=getGain(), gp=g.gain;
       if(semitones===0){
         // exact-fidelity bypass: play the decoded buffer untouched
+        const t0=ctx.currentTime+0.05;
         const src=ctx.createBufferSource();
-        src.buffer=buf; src.connect(ctx.destination);
+        src.buffer=buf; src.connect(g);
         src.onended=()=>setPlaying(false);
-        srcRef.current=src; src.start();
+        srcRef.current=src;
+        gp.cancelScheduledValues(t0); gp.setValueAtTime(0,t0); gp.linearRampToValueAtTime(1,t0+FADE);
+        src.start(t0);
+        clearTimeout(endTimer.current);
       } else {
         // pitch-shift via Signalsmith (duration preserved); handles mono + polyphonic
         const node=await ensureStretch();
         const chans=[]; for(let c=0;c<buf.numberOfChannels;c++) chans.push(buf.getChannelData(c));
         await node.dropBuffers();
         await node.addBuffers(chans);
-        node.start({input:0, rate:1, semitones});
+        const lat=(typeof node.latency==="function"?node.latency():0)||0;
+        const t0=ctx.currentTime+Math.max(0.06,lat+0.03);
+        node.start({output:t0, input:0, rate:1, semitones});
+        gp.cancelScheduledValues(t0); gp.setValueAtTime(0,t0); gp.linearRampToValueAtTime(1,t0+FADE);
         clearTimeout(endTimer.current);
-        endTimer.current=setTimeout(()=>setPlaying(false), buf.duration*1000+250);
+        endTimer.current=setTimeout(()=>setPlaying(false),(t0-ctx.currentTime+buf.duration)*1000+250);
       }
       setPlaying(true);
     }catch(e){ setEngineErr("Audio engine failed to play this card."); setPlaying(false); }
     finally{ setBusy(false); }
-  },[cards,getBuffer,ensureStretch,stopNodes]);
+  },[cards,getBuffer,ensureStretch,getGain,silence]);
 
   const advance=useCallback(async()=>{
     if(cards.length===0) return;
@@ -499,7 +518,7 @@ function DrillView({ cards }){
   },[cards.length,nextSemi,playIndex]);
 
   const start=async()=>{ cycleSeq.current=[]; cyclePos.current=0; lastIdx.current=-1; setCount(0); setRunning(true); setTimeout(()=>advance(),0); };
-  const stopDrill=()=>{ stopNodes(); setRunning(false); setPlaying(false); setCurIdx(-1); };
+  const stopDrill=()=>{ silence(); setRunning(false); setPlaying(false); setCurIdx(-1); };
   const replay=async()=>{ if(curIdx<0) return; await playIndex(curIdx,semi); };
 
   if(cards.length===0){
