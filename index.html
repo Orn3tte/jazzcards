@@ -247,21 +247,53 @@ function CardRow({ card, onEdit, onDelete, onTagClick }){
   const [slideX,setSlideX]=useState(0);
   const [anim,setAnim]=useState(false);
   const [confirming,setConfirming]=useState(false);
-  const url=useMemo(()=>card.blob?URL.createObjectURL(card.blob):card.audioBase64,[card]);
-  const audioRef=useRef(null);
+  const bufRef=useRef(null), chainRef=useRef(null), fallbackAudio=useRef(null);
   const REVEAL=104;
   const liveX=useRef(0), touchBase=useRef(0), startX=useRef(0), startY=useRef(0), dirLock=useRef(null);
 
-  useEffect(()=>()=>{if(audioRef.current)audioRef.current.pause();if(card.blob&&url)URL.revokeObjectURL(url);},[url]);
+  // stop playback cleanly (short fade-out so pausing doesn't click)
+  const stopPlayback=useCallback(()=>{
+    const c=chainRef.current;
+    if(c && _audioCtx){
+      const t=_audioCtx.currentTime;
+      try{ c.g.gain.cancelScheduledValues(t); c.g.gain.setValueAtTime(c.g.gain.value,t); c.g.gain.linearRampToValueAtTime(0,t+0.008); }catch(_){}
+      try{ c.src.onended=null; c.src.stop(t+0.02); }catch(_){}
+      setTimeout(()=>{ try{ c.src.disconnect(); c.g.disconnect(); c.hp.disconnect(); }catch(_){} },50);
+      chainRef.current=null;
+    }
+    if(fallbackAudio.current){ try{ fallbackAudio.current.pause(); }catch(_){} }
+  },[]);
+
+  useEffect(()=>()=>stopPlayback(),[stopPlayback]);
 
   const moveTo=(x,animated)=>{liveX.current=x;setAnim(animated);setSlideX(x);if(x===0)setConfirming(false);};
+
+  // play through Web Audio with a 200ms fade-in + DC-block highpass (matches the drill engine)
+  const play=useCallback(async()=>{
+    if(card.blob){
+      const ctx=getAudioCtx();
+      if(ctx.state==="suspended") await ctx.resume();
+      if(!bufRef.current) bufRef.current=await ctx.decodeAudioData(await card.blob.arrayBuffer());
+      const buf=bufRef.current;
+      const src=ctx.createBufferSource(); src.buffer=buf;
+      const g=ctx.createGain(); g.gain.value=0;
+      const hp=ctx.createBiquadFilter(); hp.type="highpass"; hp.frequency.value=50; hp.Q.value=0.707;
+      src.connect(g); g.connect(hp); hp.connect(ctx.destination);
+      const t0=ctx.currentTime+0.03, fadeIn=Math.min(0.2,(buf.duration||0)*0.5);
+      g.gain.setValueAtTime(0,t0); g.gain.linearRampToValueAtTime(1,t0+fadeIn);
+      src.onended=()=>{ setPlaying(false); try{ src.disconnect(); g.disconnect(); hp.disconnect(); }catch(_){} chainRef.current=null; };
+      chainRef.current={src,g,hp}; src.start(t0); setPlaying(true);
+    } else if(card.audioBase64){ // legacy cards without a blob
+      if(!fallbackAudio.current){ fallbackAudio.current=new Audio(card.audioBase64); fallbackAudio.current.onended=()=>setPlaying(false); }
+      fallbackAudio.current.currentTime=0; fallbackAudio.current.play(); setPlaying(true);
+    }
+  },[card]);
 
   const toggle=(e)=>{
     e.stopPropagation();
     if(liveX.current!==0){moveTo(0,true);return;}
-    if(!audioRef.current){audioRef.current=new Audio(url);audioRef.current.onended=()=>setPlaying(false);}
-    if(playing){audioRef.current.pause();setPlaying(false);}
-    else{audioRef.current.currentTime=0;audioRef.current.play();setPlaying(true);}
+    if(playing){ stopPlayback(); setPlaying(false); }
+    else { play(); }
   };
 
   const onTS=(e)=>{startX.current=e.touches[0].clientX;startY.current=e.touches[0].clientY;touchBase.current=liveX.current;dirLock.current=null;setAnim(false);};
@@ -336,8 +368,7 @@ function Recorder({ existing, onSave, onCancel }){
   const [err,setErr]=useState(null);
   const [preview,setPreview]=useState(false);
 
-  const mediaRec=useRef(null), chunks=useRef([]), timer=useRef(null), startedAt=useRef(0), stream=useRef(null), previewAudio=useRef(null);
-  const previewUrl = useMemo(()=> audioBlob ? URL.createObjectURL(audioBlob) : null, [audioBlob]);
+  const mediaRec=useRef(null), chunks=useRef([]), timer=useRef(null), startedAt=useRef(0), stream=useRef(null), pvChain=useRef(null);
 
   const stop=useCallback(()=>{ if(mediaRec.current && mediaRec.current.state!=="inactive") mediaRec.current.stop(); clearInterval(timer.current); },[]);
 
@@ -370,13 +401,34 @@ function Recorder({ existing, onSave, onCancel }){
     }catch(e){ setErr("Microphone access was blocked. Allow mic permission and try again."); }
   };
 
-  useEffect(()=>()=>{ clearInterval(timer.current); if(stream.current){ stream.current.getTracks().forEach(t=>t.stop()); stream.current=null; } if(previewAudio.current) previewAudio.current.pause(); if(previewUrl) URL.revokeObjectURL(previewUrl); },[previewUrl]);
+  const stopPreview=useCallback(()=>{
+    const c=pvChain.current;
+    if(c && _audioCtx){
+      const t=_audioCtx.currentTime;
+      try{ c.g.gain.cancelScheduledValues(t); c.g.gain.setValueAtTime(c.g.gain.value,t); c.g.gain.linearRampToValueAtTime(0,t+0.008); }catch(_){}
+      try{ c.src.onended=null; c.src.stop(t+0.02); }catch(_){}
+      setTimeout(()=>{ try{ c.src.disconnect(); c.g.disconnect(); c.hp.disconnect(); }catch(_){} },50);
+      pvChain.current=null;
+    }
+  },[]);
 
-  const togglePreview=()=>{
-    if(!previewUrl) return;
-    if(!previewAudio.current){ previewAudio.current=new Audio(previewUrl); previewAudio.current.onended=()=>setPreview(false); }
-    if(preview){ previewAudio.current.pause(); setPreview(false); }
-    else { previewAudio.current.currentTime=0; previewAudio.current.play(); setPreview(true); }
+  useEffect(()=>()=>{ clearInterval(timer.current); if(stream.current){ stream.current.getTracks().forEach(t=>t.stop()); stream.current=null; } stopPreview(); },[stopPreview]);
+
+  // preview the recorded clip through the same Web Audio chain (200ms fade-in + highpass)
+  const togglePreview=async()=>{
+    if(!audioBlob) return;
+    if(preview){ stopPreview(); setPreview(false); return; }
+    const ctx=getAudioCtx();
+    if(ctx.state==="suspended") await ctx.resume();
+    const buf=await ctx.decodeAudioData(await audioBlob.arrayBuffer());
+    const src=ctx.createBufferSource(); src.buffer=buf;
+    const g=ctx.createGain(); g.gain.value=0;
+    const hp=ctx.createBiquadFilter(); hp.type="highpass"; hp.frequency.value=50; hp.Q.value=0.707;
+    src.connect(g); g.connect(hp); hp.connect(ctx.destination);
+    const t0=ctx.currentTime+0.03, fadeIn=Math.min(0.2,(buf.duration||0)*0.5);
+    g.gain.setValueAtTime(0,t0); g.gain.linearRampToValueAtTime(1,t0+fadeIn);
+    src.onended=()=>{ setPreview(false); try{ src.disconnect(); g.disconnect(); hp.disconnect(); }catch(_){} pvChain.current=null; };
+    pvChain.current={src,g,hp}; src.start(t0); setPreview(true);
   };
 
   const commit=()=>{
