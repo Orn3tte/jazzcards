@@ -217,34 +217,68 @@ function CardsView({ cards, onUpsert, onRemove, flash }){
 
 function CardRow({ card, onEdit, onDelete, onTagClick }){
   const [playing,setPlaying]=useState(false);
-  const url = useMemo(()=> card.blob ? URL.createObjectURL(card.blob) : card.audioBase64, [card]);
+  const [slideX,setSlideX]=useState(0);
+  const [anim,setAnim]=useState(false);
+  const url=useMemo(()=>card.blob?URL.createObjectURL(card.blob):card.audioBase64,[card]);
   const audioRef=useRef(null);
-  useEffect(()=>()=>{ if(audioRef.current) audioRef.current.pause(); if(card.blob && url) URL.revokeObjectURL(url); },[url]);
-  const toggle=()=>{
-    if(!audioRef.current){ audioRef.current=new Audio(url); audioRef.current.onended=()=>setPlaying(false); }
-    if(playing){ audioRef.current.pause(); setPlaying(false); }
-    else { audioRef.current.currentTime=0; audioRef.current.play(); setPlaying(true); }
+  const REVEAL=104;
+  const liveX=useRef(0), touchBase=useRef(0), startX=useRef(0), startY=useRef(0), dirLock=useRef(null);
+
+  useEffect(()=>()=>{if(audioRef.current)audioRef.current.pause();if(card.blob&&url)URL.revokeObjectURL(url);},[url]);
+
+  const moveTo=(x,animated)=>{liveX.current=x;setAnim(animated);setSlideX(x);};
+
+  const toggle=(e)=>{
+    e.stopPropagation();
+    if(liveX.current!==0){moveTo(0,true);return;}
+    if(!audioRef.current){audioRef.current=new Audio(url);audioRef.current.onended=()=>setPlaying(false);}
+    if(playing){audioRef.current.pause();setPlaying(false);}
+    else{audioRef.current.currentTime=0;audioRef.current.play();setPlaying(true);}
   };
+
+  const onTS=(e)=>{startX.current=e.touches[0].clientX;startY.current=e.touches[0].clientY;touchBase.current=liveX.current;dirLock.current=null;setAnim(false);};
+  const onTM=(e)=>{
+    const dx=e.touches[0].clientX-startX.current, dy=e.touches[0].clientY-startY.current;
+    if(!dirLock.current){if(Math.abs(dx)<4&&Math.abs(dy)<4)return;dirLock.current=Math.abs(dx)>=Math.abs(dy)?"h":"v";}
+    if(dirLock.current==="v")return;
+    const nx=Math.max(-REVEAL,Math.min(0,touchBase.current+dx));
+    liveX.current=nx;setSlideX(nx);
+  };
+  const onTE=()=>{
+    if(dirLock.current!=="h")return;
+    const cur=liveX.current;
+    moveTo(touchBase.current===0?(cur<-40?-REVEAL:0):(cur>-(REVEAL-40)?0:-REVEAL),true);
+    dirLock.current=null;
+  };
+
   return (
-    <div style={{background:PANEL,border:`1px solid ${LINE}`,borderRadius:14,padding:"13px 14px",marginBottom:11,display:"flex",alignItems:"center",gap:13}}>
-      <button onClick={toggle} aria-label={playing?"Pause":"Play"} style={{width:46,height:46,borderRadius:"50%",flexShrink:0,background:playing?ACCENT:PANEL_HI,border:`1px solid ${playing?ACCENT:LINE}`,display:"grid",placeItems:"center"}}>
-        {playing? <Icon name="pause" size={19} color={BG}/> : <Icon name="play" size={19} color={ACCENT} style={{marginLeft:2}}/>}
-      </button>
-      <div style={{flex:1,minWidth:0}}>
-        <div style={{fontWeight:700,fontSize:15.5,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{card.title||"Untitled"}</div>
-        {(card.player||card.track||card.record||card.year) && (
-          <div style={{fontSize:12,color:MUTED,marginTop:3,lineHeight:1.8}}>
-            {card.player && <><span>from </span><button onClick={(e)=>{e.stopPropagation();onTagClick("player",card.player);}} style={{background:"none",border:"none",padding:0,color:ACCENT,fontFamily:"'DM Mono',monospace",fontSize:12,cursor:"pointer",letterSpacing:".02em"}}>{card.player}</button></>}
-            {card.track && <><span>{card.player?" in ":"in "}</span><button onClick={(e)=>{e.stopPropagation();onTagClick("track",card.track);}} style={{background:"none",border:"none",padding:0,color:ACCENT,fontFamily:"'DM Mono',monospace",fontSize:12,cursor:"pointer",letterSpacing:".02em"}}>{card.track}</button></>}
-            {card.record && <><span>{(card.player||card.track)?" on ":"on "}</span><button onClick={(e)=>{e.stopPropagation();onTagClick("record",card.record);}} style={{background:"none",border:"none",padding:0,color:ACCENT,fontFamily:"'DM Mono',monospace",fontSize:12,cursor:"pointer",letterSpacing:".02em"}}>{card.record}</button></>}
-            {card.year && <><span> (</span><button onClick={(e)=>{e.stopPropagation();onTagClick("year",card.year);}} style={{background:"none",border:"none",padding:0,color:ACCENT,fontFamily:"'DM Mono',monospace",fontSize:12,cursor:"pointer",letterSpacing:".02em"}}>{card.year}</button><span>)</span></>}
-          </div>
-        )}
-        {card.description ? <div style={{fontSize:13,color:MUTED,marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{card.description}</div> : null}
-        <div className="mono" style={{fontSize:10.5,color:ACCENT_DIM,marginTop:4,letterSpacing:".03em"}}>{fmt(card.duration||0)}</div>
+    <div style={{position:"relative",overflow:"hidden",borderRadius:14,marginBottom:11,background:PANEL}}>
+      <div style={{position:"absolute",right:0,top:0,bottom:0,width:REVEAL,display:"flex",alignItems:"center",justifyContent:"center",gap:8}}>
+        <button onClick={onEdit} aria-label="Edit" style={{width:42,height:42,borderRadius:10,background:PANEL_HI,border:`1px solid ${LINE}`,display:"grid",placeItems:"center"}}><Icon name="pencil" size={17} color={MUTED}/></button>
+        <button onClick={onDelete} aria-label="Delete" style={{width:42,height:42,borderRadius:10,background:"#2A1010",border:`1px solid ${RED}`,display:"grid",placeItems:"center"}}><Icon name="trash" size={17} color={RED}/></button>
       </div>
-      <button onClick={onEdit} aria-label="Edit" style={{background:"transparent",padding:8}}><Icon name="pencil" size={17} color={MUTED}/></button>
-      <button onClick={onDelete} aria-label="Delete" style={{background:"transparent",padding:8}}><Icon name="trash" size={17} color={MUTED}/></button>
+      <div
+        onTouchStart={onTS} onTouchMove={onTM} onTouchEnd={onTE}
+        onClick={slideX!==0?()=>moveTo(0,true):undefined}
+        style={{background:PANEL,border:`1px solid ${LINE}`,borderRadius:14,padding:"13px 14px",display:"flex",alignItems:"center",gap:13,transform:`translateX(${slideX}px)`,transition:anim?"transform .2s ease":"none",willChange:"transform",touchAction:"pan-y",userSelect:"none"}}
+      >
+        <button onClick={toggle} aria-label={playing?"Pause":"Play"} style={{width:46,height:46,borderRadius:"50%",flexShrink:0,background:playing?ACCENT:PANEL_HI,border:`1px solid ${playing?ACCENT:LINE}`,display:"grid",placeItems:"center"}}>
+          {playing?<Icon name="pause" size={19} color={BG}/>:<Icon name="play" size={19} color={ACCENT} style={{marginLeft:2}}/>}
+        </button>
+        <div style={{flex:1,minWidth:0}}>
+          <div style={{fontWeight:700,fontSize:15.5,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{card.title||"Untitled"}</div>
+          {(card.player||card.track||card.record||card.year)&&(
+            <div style={{fontSize:12,color:MUTED,marginTop:3,lineHeight:1.8}}>
+              {card.player&&<><span>from </span><button onClick={(e)=>{e.stopPropagation();onTagClick("player",card.player);}} style={{background:"none",border:"none",padding:0,color:ACCENT,fontFamily:"'DM Mono',monospace",fontSize:12,cursor:"pointer",letterSpacing:".02em"}}>{card.player}</button></>}
+              {card.track&&<><span>{card.player?" in ":"in "}</span><button onClick={(e)=>{e.stopPropagation();onTagClick("track",card.track);}} style={{background:"none",border:"none",padding:0,color:ACCENT,fontFamily:"'DM Mono',monospace",fontSize:12,cursor:"pointer",letterSpacing:".02em"}}>{card.track}</button></>}
+              {card.record&&<><span>{(card.player||card.track)?" on ":"on "}</span><button onClick={(e)=>{e.stopPropagation();onTagClick("record",card.record);}} style={{background:"none",border:"none",padding:0,color:ACCENT,fontFamily:"'DM Mono',monospace",fontSize:12,cursor:"pointer",letterSpacing:".02em"}}>{card.record}</button></>}
+              {card.year&&<><span> (</span><button onClick={(e)=>{e.stopPropagation();onTagClick("year",card.year);}} style={{background:"none",border:"none",padding:0,color:ACCENT,fontFamily:"'DM Mono',monospace",fontSize:12,cursor:"pointer",letterSpacing:".02em"}}>{card.year}</button><span>)</span></>}
+            </div>
+          )}
+          {card.description?<div style={{fontSize:13,color:MUTED,marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{card.description}</div>:null}
+          <div className="mono" style={{fontSize:10.5,color:ACCENT_DIM,marginTop:4,letterSpacing:".03em"}}>{fmt(card.duration||0)}</div>
+        </div>
+      </div>
     </div>
   );
 }
