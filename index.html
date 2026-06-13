@@ -232,16 +232,16 @@ function CardRow({ card, onEdit, onDelete, onTagClick }){
       </button>
       <div style={{flex:1,minWidth:0}}>
         <div style={{fontWeight:700,fontSize:15.5,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{card.title||"Untitled"}</div>
-        {card.description ? <div style={{fontSize:13,color:MUTED,marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{card.description}</div> : null}
-        <div className="mono" style={{fontSize:10.5,color:ACCENT_DIM,marginTop:4,letterSpacing:".03em"}}>{fmt(card.duration||0)}</div>
         {(card.player||card.track||card.record||card.year) && (
-          <div style={{fontSize:12,color:MUTED,marginTop:5,lineHeight:1.8}}>
-            {card.player && <><span>from </span><button onClick={(e)=>{e.stopPropagation();onTagClick("player",card.player);}} style={{background:"none",border:"none",padding:0,color:ACCENT,fontFamily:"'DM Mono',monospace",fontSize:12,cursor:"pointer",letterSpacing:".02em"}}>#{card.player}</button></>}
-            {card.track && <><span>{card.player?" in ":"in "}</span><button onClick={(e)=>{e.stopPropagation();onTagClick("track",card.track);}} style={{background:"none",border:"none",padding:0,color:ACCENT,fontFamily:"'DM Mono',monospace",fontSize:12,cursor:"pointer",letterSpacing:".02em"}}>#{card.track}</button></>}
-            {card.record && <><span>{(card.player||card.track)?" on ":"on "}</span><button onClick={(e)=>{e.stopPropagation();onTagClick("record",card.record);}} style={{background:"none",border:"none",padding:0,color:ACCENT,fontFamily:"'DM Mono',monospace",fontSize:12,cursor:"pointer",letterSpacing:".02em"}}>#{card.record}</button></>}
-            {card.year && <><span> (</span><button onClick={(e)=>{e.stopPropagation();onTagClick("year",card.year);}} style={{background:"none",border:"none",padding:0,color:ACCENT,fontFamily:"'DM Mono',monospace",fontSize:12,cursor:"pointer",letterSpacing:".02em"}}>#{card.year}</button><span>)</span></>}
+          <div style={{fontSize:12,color:MUTED,marginTop:3,lineHeight:1.8}}>
+            {card.player && <><span>from </span><button onClick={(e)=>{e.stopPropagation();onTagClick("player",card.player);}} style={{background:"none",border:"none",padding:0,color:ACCENT,fontFamily:"'DM Mono',monospace",fontSize:12,cursor:"pointer",letterSpacing:".02em"}}>{card.player}</button></>}
+            {card.track && <><span>{card.player?" in ":"in "}</span><button onClick={(e)=>{e.stopPropagation();onTagClick("track",card.track);}} style={{background:"none",border:"none",padding:0,color:ACCENT,fontFamily:"'DM Mono',monospace",fontSize:12,cursor:"pointer",letterSpacing:".02em"}}>{card.track}</button></>}
+            {card.record && <><span>{(card.player||card.track)?" on ":"on "}</span><button onClick={(e)=>{e.stopPropagation();onTagClick("record",card.record);}} style={{background:"none",border:"none",padding:0,color:ACCENT,fontFamily:"'DM Mono',monospace",fontSize:12,cursor:"pointer",letterSpacing:".02em"}}>{card.record}</button></>}
+            {card.year && <><span> (</span><button onClick={(e)=>{e.stopPropagation();onTagClick("year",card.year);}} style={{background:"none",border:"none",padding:0,color:ACCENT,fontFamily:"'DM Mono',monospace",fontSize:12,cursor:"pointer",letterSpacing:".02em"}}>{card.year}</button><span>)</span></>}
           </div>
         )}
+        {card.description ? <div style={{fontSize:13,color:MUTED,marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{card.description}</div> : null}
+        <div className="mono" style={{fontSize:10.5,color:ACCENT_DIM,marginTop:4,letterSpacing:".03em"}}>{fmt(card.duration||0)}</div>
       </div>
       <button onClick={onEdit} aria-label="Edit" style={{background:"transparent",padding:8}}><Icon name="pencil" size={17} color={MUTED}/></button>
       <button onClick={onDelete} aria-label="Delete" style={{background:"transparent",padding:8}}><Icon name="trash" size={17} color={MUTED}/></button>
