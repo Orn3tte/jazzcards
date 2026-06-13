@@ -234,11 +234,12 @@ function CardRow({ card, onEdit, onDelete, onTagClick }){
         <div style={{fontWeight:700,fontSize:15.5,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{card.title||"Untitled"}</div>
         {card.description ? <div style={{fontSize:13,color:MUTED,marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{card.description}</div> : null}
         <div className="mono" style={{fontSize:10.5,color:ACCENT_DIM,marginTop:4,letterSpacing:".03em"}}>{fmt(card.duration||0)}</div>
-        {(card.player||card.track||card.record) && (
-          <div style={{display:"flex",gap:4,flexWrap:"wrap",marginTop:6}}>
-            {[["player",card.player],["track",card.track],["record",card.record]].filter(([,v])=>v).map(([type,val])=>(
-              <button key={type} onClick={(e)=>{e.stopPropagation();onTagClick(type,val);}} style={{background:PANEL_HI,border:`1px solid ${LINE}`,borderRadius:20,padding:"2px 8px",fontSize:11,color:MUTED,fontFamily:"'DM Mono',monospace",cursor:"pointer",letterSpacing:".02em"}}>#{val}</button>
-            ))}
+        {(card.player||card.track||card.record||card.year) && (
+          <div style={{fontSize:12,color:MUTED,marginTop:5,lineHeight:1.8}}>
+            {card.player && <><span>from </span><button onClick={(e)=>{e.stopPropagation();onTagClick("player",card.player);}} style={{background:"none",border:"none",padding:0,color:ACCENT,fontFamily:"'DM Mono',monospace",fontSize:12,cursor:"pointer",letterSpacing:".02em"}}>#{card.player}</button></>}
+            {card.track && <><span>{card.player?" in ":"in "}</span><button onClick={(e)=>{e.stopPropagation();onTagClick("track",card.track);}} style={{background:"none",border:"none",padding:0,color:ACCENT,fontFamily:"'DM Mono',monospace",fontSize:12,cursor:"pointer",letterSpacing:".02em"}}>#{card.track}</button></>}
+            {card.record && <><span>{(card.player||card.track)?" on ":"on "}</span><button onClick={(e)=>{e.stopPropagation();onTagClick("record",card.record);}} style={{background:"none",border:"none",padding:0,color:ACCENT,fontFamily:"'DM Mono',monospace",fontSize:12,cursor:"pointer",letterSpacing:".02em"}}>#{card.record}</button></>}
+            {card.year && <><span> (</span><button onClick={(e)=>{e.stopPropagation();onTagClick("year",card.year);}} style={{background:"none",border:"none",padding:0,color:ACCENT,fontFamily:"'DM Mono',monospace",fontSize:12,cursor:"pointer",letterSpacing:".02em"}}>#{card.year}</button><span>)</span></>}
           </div>
         )}
       </div>
@@ -259,6 +260,7 @@ function Recorder({ existing, onSave, onCancel }){
   const [player,setPlayer]=useState(existing?existing.player||"":"");
   const [track,setTrack]=useState(existing?existing.track||"":"");
   const [record,setRecord]=useState(existing?existing.record||"":"");
+  const [year,setYear]=useState(existing?existing.year||"":"");
   const [err,setErr]=useState(null);
   const [preview,setPreview]=useState(false);
 
@@ -299,7 +301,7 @@ function Recorder({ existing, onSave, onCancel }){
 
   const commit=()=>{
     if(!audioBlob) return;
-    onSave({ id: existing?existing.id:`c_${Date.now()}_${Math.random().toString(36).slice(2,7)}`, title:title.trim(), description:desc.trim(), player:player.trim(), track:track.trim(), record:record.trim(), blob:audioBlob, duration, createdAt: existing?existing.createdAt:Date.now() });
+    onSave({ id: existing?existing.id:`c_${Date.now()}_${Math.random().toString(36).slice(2,7)}`, title:title.trim(), description:desc.trim(), player:player.trim(), track:track.trim(), record:record.trim(), year:year.trim(), blob:audioBlob, duration, createdAt: existing?existing.createdAt:Date.now() });
   };
 
   const inputStyle={width:"100%",background:BG,border:`1px solid ${LINE}`,borderRadius:10,color:TEXT,padding:"11px 13px",fontSize:15};
@@ -342,6 +344,7 @@ function Recorder({ existing, onSave, onCancel }){
         <input value={player} onChange={(e)=>setPlayer(e.target.value)} placeholder="Player (e.g. Coltrane, Parker…)" style={inputStyle} maxLength={60}/>
         <input value={track} onChange={(e)=>setTrack(e.target.value)} placeholder="Track (e.g. Giant Steps)" style={inputStyle} maxLength={80}/>
         <input value={record} onChange={(e)=>setRecord(e.target.value)} placeholder="Record (e.g. A Love Supreme)" style={inputStyle} maxLength={80}/>
+        <input value={year} onChange={(e)=>setYear(e.target.value)} placeholder="Year (e.g. 1959)" style={inputStyle} maxLength={4}/>
       </div>
 
       <button onClick={commit} disabled={!audioBlob} style={{width:"100%",marginTop:16,padding:14,borderRadius:12,background:audioBlob?ACCENT:PANEL_HI,color:audioBlob?BG:MUTED,fontWeight:700,fontSize:15.5,display:"flex",alignItems:"center",justifyContent:"center",gap:8,opacity:audioBlob?1:0.6}}>
