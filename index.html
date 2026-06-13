@@ -452,7 +452,8 @@ function DrillView({ cards }){
 
   const cycleSeq=useRef([]), cyclePos=useRef(0), lastIdx=useRef(-1);
   const srcRef=useRef(null), stretchRef=useRef(null), bufCache=useRef(new Map()), endTimer=useRef(null), gainRef=useRef(null), hpRef=useRef(null);
-  const FADE=0.006; // s — short fade in/out to kill onset/offset clicks while preserving the attack
+  const FADE=0.006;    // s — quick fade-out on stop/interrupt
+  const FADE_IN=0.2;   // s — long fade-in to swallow the mic-open transient at the start of each clip
 
   // master chain: nodes → gain (envelope) → highpass (DC/sub-bass thump blocker) → out
   const getGain=useCallback(()=>{
@@ -523,18 +524,17 @@ function DrillView({ cards }){
       const ctx=getAudioCtx();
       if(ctx.state==="suspended") await ctx.resume();
       silence(); // fade out & stop previous
-      const {buf,lead:rawLead}=await getBuffer(cards[idx]);
+      const {buf}=await getBuffer(cards[idx]);
       const g=getGain(), gp=g.gain;
-      const lead=Math.min(Math.max(rawLead,0),(buf.duration||0)*0.5); // trim to onset (capped)
+      const fadeIn=Math.min(FADE_IN,(buf.duration||0)*0.5); // 200ms fade-in from the start of each clip
       if(semitones===0){
-        // exact-fidelity bypass: play the decoded buffer (from `lead` onward)
         const t0=ctx.currentTime+0.05;
         const src=ctx.createBufferSource();
         src.buffer=buf; src.connect(g);
         src.onended=()=>setPlaying(false);
         srcRef.current=src;
-        gp.cancelScheduledValues(t0); gp.setValueAtTime(0,t0); gp.linearRampToValueAtTime(1,t0+FADE);
-        src.start(t0,lead);
+        gp.cancelScheduledValues(t0); gp.setValueAtTime(0,t0); gp.linearRampToValueAtTime(1,t0+fadeIn);
+        src.start(t0);
         clearTimeout(endTimer.current);
       } else {
         // pitch-shift via Signalsmith (duration preserved); handles mono + polyphonic
@@ -544,10 +544,10 @@ function DrillView({ cards }){
         await node.addBuffers(chans);
         const lat=(typeof node.latency==="function"?node.latency():0)||0;
         const t0=ctx.currentTime+Math.max(0.06,lat+0.03);
-        node.start({output:t0, input:lead, rate:1, semitones});
-        gp.cancelScheduledValues(t0); gp.setValueAtTime(0,t0); gp.linearRampToValueAtTime(1,t0+FADE);
+        node.start({output:t0, input:0, rate:1, semitones});
+        gp.cancelScheduledValues(t0); gp.setValueAtTime(0,t0); gp.linearRampToValueAtTime(1,t0+fadeIn);
         clearTimeout(endTimer.current);
-        endTimer.current=setTimeout(()=>setPlaying(false),(t0-ctx.currentTime+buf.duration-lead)*1000+250);
+        endTimer.current=setTimeout(()=>setPlaying(false),(t0-ctx.currentTime+buf.duration)*1000+250);
       }
       setPlaying(true);
     }catch(e){ setEngineErr("Audio engine failed to play this card."); setPlaying(false); }
